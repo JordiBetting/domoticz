@@ -125,7 +125,9 @@
 #include "../hardware/ZiBlueTCP.h"
 #include "../hardware/Yeelight.h"
 #include "../hardware/XiaomiGateway.h"
+#ifdef ENABLE_PYTHON
 #include "../hardware/plugins/Plugins.h"
+#endif
 #include "../hardware/Arilux.h"
 #include "../hardware/OpenWebNetUSB.h"
 #include "../hardware/InComfort.h"
@@ -142,6 +144,7 @@
 #include "../hardware/TTNMQTT.h"
 #include "../hardware/Buienradar.h"
 #include "../hardware/OctoPrintMQTT.h"
+#include "../hardware/Meteorologisk.h"
 
 // load notifications configuration
 #include "../notifications/NotificationHelper.h"
@@ -173,6 +176,8 @@
 #include <iostream>
 #include <fstream>
 #endif
+
+using namespace boost::placeholders;
 
 #define round(a) ( int ) ( a + .5 )
 
@@ -692,7 +697,7 @@ bool MainWorker::AddHardwareFromParams(
 		pHardware = new RFXComTCP(ID, Address, Port, (CRFXBase::_eRFXAsyncType)atoi(Extra.c_str()));
 		break;
 	case HTYPE_P1SmartMeter:
-		pHardware = new P1MeterSerial(ID, SerialPort, (Mode1 == 1) ? 115200 : 9600, (Mode2 != 0), Mode3);
+		pHardware = new P1MeterSerial(ID, SerialPort, (Mode1 == 1) ? 115200 : 9600, (Mode2 != 0), Mode3, Password);
 		break;
 	case HTYPE_Rego6XX:
 		pHardware = new CRego6XXSerial(ID, SerialPort, Mode1);
@@ -763,7 +768,7 @@ bool MainWorker::AddHardwareFromParams(
 		break;
 	case HTYPE_P1SmartMeterLAN:
 		//LAN
-		pHardware = new P1MeterTCP(ID, Address, Port, (Mode2 != 0), Mode3);
+		pHardware = new P1MeterTCP(ID, Address, Port, (Mode2 != 0), Mode3, Password);
 		break;
 	case HTYPE_WOL:
 		//LAN
@@ -1032,7 +1037,7 @@ bool MainWorker::AddHardwareFromParams(
 		pHardware = new DomoticzInternal(ID);
 		break;
 	case HTYPE_OpenWebNetTCP:
-		pHardware = new COpenWebNetTCP(ID, Address, Port, Password, Mode1);
+		pHardware = new COpenWebNetTCP(ID, Address, Port, Password, Mode1, Mode2);
 		break;
 	case HTYPE_BleBox:
 		pHardware = new BleBox(ID, Mode1);
@@ -1095,6 +1100,9 @@ bool MainWorker::AddHardwareFromParams(
 		break;
 	case HTYPE_OctoPrint:
 		pHardware = new COctoPrintMQTT(ID, Address, Port, Username, Password, Extra);
+		break;
+	case HTYPE_Meteorologisk:
+		pHardware = new CMeteorologisk(ID, Password); //Password is location here.
 		break;
 	}
 
@@ -5867,6 +5875,12 @@ void MainWorker::decode_Fan(const CDomoticzHardwareBase* pHardware, const tRBUF*
 		case sTypeLucciAirDCII:
 			WriteMessage("subtype       = Lucci Air DC II");
 			break;
+		case sTypeIthoECO:
+			WriteMessage("subtype       = Itho ECO");
+			break;
+		case sTypeNovy:
+			WriteMessage("subtype       = Novy");
+			break;
 		default:
 			sprintf(szTmp, "ERROR: Unknown Sub type for Packet type= %02X:%02X", pResponse->LIGHTING6.packettype, pResponse->LIGHTING6.subtype);
 			WriteMessage(szTmp);
@@ -9941,7 +9955,7 @@ void MainWorker::decode_Usage(const CDomoticzHardwareBase* pHardware, const tRBU
 	std::string ID = szTmp;
 	uint8_t Unit = pMeter->dunit;
 	uint8_t cmnd = 0;
-	uint8_t SignalLevel = 12;
+	uint8_t SignalLevel = pMeter->rssi;
 	uint8_t BatteryLevel = 255;
 
 	sprintf(szTmp, "%.1f", pMeter->fusage);
@@ -13013,11 +13027,19 @@ bool MainWorker::SwitchScene(const uint64_t idx, std::string switchcmd, const st
 
 		if (scenetype == SGTYPE_GROUP)
 		{
+			std::vector<std::string> validCmdArray {"On", "Off", "Toggle", "Group On" , "Chime", "All On"};
+			if (std::find(validCmdArray.begin(), validCmdArray.end(), switchcmd) == validCmdArray.end())
+				return false;
 			//when asking for Toggle, just switch to the opposite value
 			if (switchcmd == "Toggle") {
 				nValue = (atoi(status.c_str()) == 0 ? 1 : 0);
 				switchcmd = (nValue == 1 ? "On" : "Off");
 			}
+		}
+		else
+		{
+			if (switchcmd != "On")
+				return false; //A Scene can only be turned On
 		}
 		m_sql.HandleOnOffAction((nValue == 1), onaction, offaction);
 	}
